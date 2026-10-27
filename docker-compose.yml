@@ -1,0 +1,96 @@
+x-app: &app
+  build: .
+  image: payments-service
+  environment: &app-env
+    DATABASE_URL: postgresql+asyncpg://payments:payments@postgres:5432/payments
+    RABBITMQ_URL: amqp://payments:payments@rabbitmq:5672/
+    API_KEY: ${API_KEY:-dev-api-key}
+    RETRY_BASE_DELAY: ${RETRY_BASE_DELAY:-5}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: payments
+      POSTGRES_PASSWORD: payments
+      POSTGRES_DB: payments
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./docker/postgres-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U payments -d payments"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: payments
+      RABBITMQ_DEFAULT_PASS: payments
+    ports:
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+
+  migrate:
+    <<: *app
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    <<: *app
+    ports:
+      - "8000:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  consumer:
+    <<: *app
+    command: ["faststream", "run", "app.consumer:app"]
+    stop_grace_period: 15s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Webhook receiver for the demo: logs every request it gets.
+  webhook-echo:
+    image: mendhak/http-https-echo:37
+    environment:
+      HTTP_PORT: 8080
+
+  tests:
+    <<: *app
+    build:
+      context: .
+      args:
+        REQUIREMENTS: requirements-dev.txt
+    image: payments-service-dev
+    profiles: ["test"]
+    environment:
+      <<: *app-env
+      DATABASE_URL: postgresql+asyncpg://payments:payments@postgres:5432/payments_test
+      RABBITMQ_URL: amqp://payments:payments@rabbitmq:5672/test
+      API_KEY: test-api-key
+      API_URL: http://api:8000
+      STACK_API_KEY: ${API_KEY:-dev-api-key}
+      RABBITMQ_MANAGEMENT_URL: http://payments:payments@rabbitmq:15672
+    command: ["pytest", "-v", "-m", "not e2e"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+volumes:
+  postgres-data:
