@@ -25,13 +25,13 @@ app = FastStream(broker)
 _relay_task: asyncio.Task[None] | None = None
 
 
-async def emulate_gateway() -> PaymentStatus:
+async def emulate_gateway(idempotency_key: UUID) -> PaymentStatus:  # noqa: ARG001 - a real gateway dedupes on it
     await asyncio.sleep(random.uniform(settings.gateway_min_delay, settings.gateway_max_delay))
     return PaymentStatus.SUCCEEDED if random.random() < settings.gateway_success_rate else PaymentStatus.FAILED
 
 
 async def process_payment(payment_id: UUID) -> Payment:
-    """Charge the payment once; redeliveries and concurrent duplicates get the stored result."""
+    """Charge a pending payment; redeliveries and concurrent duplicates get the stored result."""
     async with Session() as session:
         payment = await session.get(Payment, payment_id)
     if payment is None:
@@ -39,7 +39,9 @@ async def process_payment(payment_id: UUID) -> Payment:
     if payment.status != PaymentStatus.PENDING:
         return payment
 
-    result = await emulate_gateway()  # no DB session is held during the slow call
+    # No DB transaction is held during the slow external call. Two concurrent duplicates may both
+    # reach the gateway; the payment id is its idempotency key, so a real gateway charges once.
+    result = await emulate_gateway(idempotency_key=payment_id)
 
     async with Session() as session, session.begin():
         await session.execute(

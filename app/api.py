@@ -3,7 +3,8 @@ from collections.abc import AsyncIterator
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, status
+from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Security, status
+from fastapi.security import APIKeyHeader
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,7 +15,9 @@ from app.models import PAYMENTS_NEW, OutboxEvent, Payment
 from app.schemas import PaymentAccepted, PaymentCreate, PaymentOut
 
 
-async def require_api_key(x_api_key: Annotated[str | None, Header()] = None) -> None:
+async def require_api_key(
+    x_api_key: Annotated[str | None, Security(APIKeyHeader(name="X-API-Key", auto_error=False))],
+) -> None:
     if x_api_key is None or not secrets.compare_digest(x_api_key.encode(), settings.api_key.encode()):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or missing API key")
 

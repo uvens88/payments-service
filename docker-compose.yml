@@ -25,9 +25,12 @@ services:
 
   rabbitmq:
     image: rabbitmq:3.13-management-alpine
+    hostname: rabbitmq  # RabbitMQ keys its data directory by node name
     environment:
       RABBITMQ_DEFAULT_USER: payments
       RABBITMQ_DEFAULT_PASS: payments
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
     ports:
       - "15672:15672"
     healthcheck:
@@ -94,3 +97,4 @@ services:
 
 volumes:
   postgres-data:
+  rabbitmq-data:

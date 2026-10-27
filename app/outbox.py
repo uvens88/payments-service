@@ -39,8 +39,8 @@ async def publish_pending() -> int:
                     persist=True,
                     message_id=str(event.id),
                 )
-            except Exception:
-                logger.exception("Outbox event %s was not published, will retry", event.id)
+            except Exception as exc:
+                logger.warning("Outbox event %s was not published, will retry: %r", event.id, exc)
                 break
             published_ids.append(event.id)
 

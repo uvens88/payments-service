@@ -23,10 +23,14 @@ class Gateway:
 
     def __init__(self, *results: PaymentStatus) -> None:
         self.results = list(results)
-        self.calls = 0
+        self.keys: list[UUID] = []
 
-    async def __call__(self) -> PaymentStatus:
-        self.calls += 1
+    @property
+    def calls(self) -> int:
+        return len(self.keys)
+
+    async def __call__(self, idempotency_key: UUID) -> PaymentStatus:
+        self.keys.append(idempotency_key)
         await asyncio.sleep(0.05)
         return self.results.pop(0)
 
@@ -174,13 +178,15 @@ async def test_unroutable_event_stays_unpublished(running_broker: None) -> None:
 
 
 async def test_concurrent_duplicates_store_one_result_and_agree(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(consumer, "emulate_gateway", Gateway(PaymentStatus.SUCCEEDED, PaymentStatus.FAILED))
+    gateway = Gateway(PaymentStatus.SUCCEEDED, PaymentStatus.FAILED)
+    monkeypatch.setattr(consumer, "emulate_gateway", gateway)
     payment = await create_payment()
 
     first, second = await asyncio.gather(consumer.process_payment(payment.id), consumer.process_payment(payment.id))
 
-    stored = await get_payment(payment.id)
-    assert first.status == second.status == stored.status
+    assert first.status == second.status == (await get_payment(payment.id)).status
+    # Whatever reached the gateway carried the payment id, so a real gateway charges once.
+    assert set(gateway.keys) == {payment.id}
 
 
 async def test_redelivery_of_processed_payment_does_not_charge_again(monkeypatch: pytest.MonkeyPatch) -> None:
